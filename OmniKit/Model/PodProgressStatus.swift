@@ -26,6 +26,10 @@ public enum PodProgressStatus: UInt8, CustomStringConvertible, Equatable {
     case delayedPrime = 14 // Saw this after delaying prime for a day
     case inactive = 15 // ($1C Deactivate Pod or packet header mismatch)
     
+    public var readyForDelivery: Bool {
+        return self == .belowFiftyUnits || self == .aboveFiftyUnits
+    }
+    
     public var description: String {
         switch self {
         case .initialized:

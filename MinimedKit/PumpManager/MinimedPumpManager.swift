@@ -553,12 +553,6 @@ public class MinimedPumpManager: RileyLinkPumpManager, PumpManager {
                         
                         self.state.isPumpSuspended = status.suspended
                         
-                        if status.bolusing {
-                            self.bolusState = .bolusing(progress: nil)
-                        } else {
-                            self.bolusState = .none
-                        }
-                        
                         self.latestPumpStatus = status
                         
                         self.updateReservoirVolume(status.reservoir, at: date, withTimeLeft: nil)

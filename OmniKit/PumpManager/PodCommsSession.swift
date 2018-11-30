@@ -230,13 +230,13 @@ public class PodCommsSession {
         throw PodCommsError.nonceResyncFailed
     }
 
-    public func configurePod() throws {
+    public func configureAndPrimePod() throws {
         //4c00 00c8 0102
-//        let alertConfig1 = ConfigureAlertsCommand.AlertConfiguration(alertType: .lowReservoir, audible: true, autoOffModifier: false, duration: 0, expirationType: .reservoir(volume: 20), beepRepeat: .every1MinuteFor15Minutes, beepType: .beepBeepBeepBeep)
+        let alertConfig1 = ConfigureAlertsCommand.AlertConfiguration(alertType: .lowReservoir, audible: true, autoOffModifier: false, duration: 0, expirationType: .reservoir(volume: 20), beepRepeat: .every1MinuteFor15Minutes, beepType: .beepBeepBeepBeep)
         
-//        let configureAlerts1 = ConfigureAlertsCommand(nonce: podState.currentNonce, configurations:[alertConfig1])
-//        let _: StatusResponse = try send([configureAlerts1])
-//        podState.advanceToNextNonce()
+        let configureAlerts1 = ConfigureAlertsCommand(nonce: podState.currentNonce, configurations:[alertConfig1])
+        let _: StatusResponse = try send([configureAlerts1])
+        podState.advanceToNextNonce()
         
         //7837 0005 0802
         let alertConfig2 = ConfigureAlertsCommand.AlertConfiguration(alertType: .timerLimit, audible:true, autoOffModifier: false, duration: .minutes(55), expirationType: .time(.minutes(5)), beepRepeat: .every1MinuteFor15Minutes, beepType: .beeepBeeep)
@@ -252,7 +252,8 @@ public class PodCommsSession {
         let bolusSchedule = SetInsulinScheduleCommand.DeliverySchedule.bolus(units: primeUnits, timeBetweenPulses: timeBetweenPulses)
         let scheduleCommand = SetInsulinScheduleCommand(nonce: podState.currentNonce, deliverySchedule: bolusSchedule)
         let bolusExtraCommand = BolusExtraCommand(units: primeUnits, timeBetweenPulses: timeBetweenPulses)
-        let _: StatusResponse = try send([scheduleCommand, bolusExtraCommand])
+        let status: StatusResponse = try send([scheduleCommand, bolusExtraCommand])
+        podState.updateFromStatusResponse(status)
         podState.advanceToNextNonce()
     }
     
@@ -260,9 +261,52 @@ public class PodCommsSession {
         // 3800 0ff0 0302
         let alertConfig = ConfigureAlertsCommand.AlertConfiguration(alertType: .expirationAdvisory, audible: false, autoOffModifier: false, duration: .minutes(0), expirationType: .time(.hours(68)), beepRepeat: .every1MinuteFor15Minutes, beepType: .bipBip)
         let configureAlerts = ConfigureAlertsCommand(nonce: podState.currentNonce, configurations:[alertConfig])
-        let _: StatusResponse = try send([configureAlerts])
+        let status: StatusResponse = try send([configureAlerts])
+        podState.updateFromStatusResponse(status)
         podState.advanceToNextNonce()
     }
+    
+    public func insertCannula(basalSchedule: BasalSchedule, scheduleOffset: TimeInterval) throws {
+        
+        // Set basal schedule
+        let _ = try setBasalSchedule(schedule: basalSchedule, scheduleOffset: scheduleOffset, confidenceReminder: false, programReminderInterval: .minutes(0))
+        
+        // Configure Alerts
+        // 79a4 10df 0502
+        // Pod expires 1 minute short of 3 days
+        let alertConfig1 = ConfigureAlertsCommand.AlertConfiguration(alertType: .timerLimit, audible: true, autoOffModifier: false, duration: .minutes(164), expirationType: .time(podSoftExpirationTime), beepRepeat: .every1MinuteFor15Minutes, beepType: .beepBeepBeep)
+        
+        // 2800 1283 0602
+        let alertConfig2 = ConfigureAlertsCommand.AlertConfiguration(alertType: .endOfService, audible: true, autoOffModifier: false, duration: .minutes(0), expirationType: .time(podHardExpirationTime), beepRepeat: .every1MinuteFor15Minutes, beepType: .beeeeeep)
+        
+        // 020f 0000 0202
+        let alertConfig3 = ConfigureAlertsCommand.AlertConfiguration(alertType: .autoOff, audible: false, autoOffModifier: true, duration: .minutes(15), expirationType: .time(0), beepRepeat: .every1MinuteFor15Minutes, beepType: .bipBeepBipBeepBipBeepBipBeep) // Would like to change this to be less annoying, for example .bipBipBipbipBipBip
+        
+        let configureAlerts = ConfigureAlertsCommand(nonce: podState.currentNonce, configurations:[alertConfig1, alertConfig2, alertConfig3])
+        
+        do {
+            let status: StatusResponse = try send([configureAlerts])
+            podState.updateFromStatusResponse(status)
+        } catch PodCommsError.podAckedInsteadOfReturningResponse {
+            print("pod acked?")
+        }
+        
+        podState.advanceToNextNonce()
+        
+        // Insert Cannula
+        // 1a0e7e30bf16020065010050000a000a
+        let insertionBolusAmount = 0.5
+        let timeBetweenPulses = TimeInterval(seconds: 1)
+        let bolusSchedule = SetInsulinScheduleCommand.DeliverySchedule.bolus(units: insertionBolusAmount, timeBetweenPulses: timeBetweenPulses)
+        let bolusScheduleCommand = SetInsulinScheduleCommand(nonce: podState.currentNonce, deliverySchedule: bolusSchedule)
+        
+        // 17 0d 00 0064 0001 86a0000000000000
+        let bolusExtraCommand = BolusExtraCommand(units: insertionBolusAmount, timeBetweenPulses: timeBetweenPulses)
+        let status: StatusResponse = try send([bolusScheduleCommand, bolusExtraCommand])
+        podState.updateFromStatusResponse(status)
+        podState.advanceToNextNonce()
+    }
+
     
     // Throws SetBolusError
     public enum DeliveryCommandResult {
@@ -372,7 +416,6 @@ public class PodCommsSession {
         let _ = try cancelDelivery(deliveryType: .all, beepType: .noBeep)
         let scheduleOffset = timeZone.scheduleOffset(forDate: date)
         let status = try setBasalSchedule(schedule: basalSchedule, scheduleOffset: scheduleOffset, confidenceReminder: false, programReminderInterval: .minutes(0))
-        self.podState.timeZone = timeZone
         return status
     }
     
@@ -387,57 +430,16 @@ public class PodCommsSession {
         return status
     }
     
-    public func resumeBasal(confidenceReminder: Bool = false, programReminderInterval: TimeInterval = 0) throws -> StatusResponse {
+    public func resumeBasal(scheduleOffset: TimeInterval, confidenceReminder: Bool = false, programReminderInterval: TimeInterval = 0) throws -> StatusResponse {
         guard let basalSchedule = podState.basalSchedule else {
             throw PodCommsError.missingBasalSchedule
         }
-        
-        let scheduleOffset = podState.timeZone.scheduleOffset(forDate: Date())
         
         let status = try setBasalSchedule(schedule: basalSchedule, scheduleOffset: scheduleOffset, confidenceReminder: confidenceReminder, programReminderInterval: programReminderInterval)
         
         podState.updateFromStatusResponse(status)
         
         return status
-    }
-    
-    public func insertCannula(basalSchedule: BasalSchedule, scheduleOffset: TimeInterval) throws {
-        
-        // Set basal schedule
-        let _ = try setBasalSchedule(schedule: basalSchedule, scheduleOffset: scheduleOffset, confidenceReminder: false, programReminderInterval: .minutes(0))
-        
-        // Configure Alerts
-        // 79a4 10df 0502
-        // Pod expires 1 minute short of 3 days
-        let alertConfig1 = ConfigureAlertsCommand.AlertConfiguration(alertType: .timerLimit, audible: true, autoOffModifier: false, duration: .minutes(164), expirationType: .time(podSoftExpirationTime), beepRepeat: .every1MinuteFor15Minutes, beepType: .beepBeepBeep)
-        
-        // 2800 1283 0602
-        let alertConfig2 = ConfigureAlertsCommand.AlertConfiguration(alertType: .endOfService, audible: true, autoOffModifier: false, duration: .minutes(0), expirationType: .time(podHardExpirationTime), beepRepeat: .every1MinuteFor15Minutes, beepType: .beeeeeep)
-        
-        // 020f 0000 0202
-        let alertConfig3 = ConfigureAlertsCommand.AlertConfiguration(alertType: .autoOff, audible: false, autoOffModifier: true, duration: .minutes(15), expirationType: .time(0), beepRepeat: .every1MinuteFor15Minutes, beepType: .bipBeepBipBeepBipBeepBipBeep) // Would like to change this to be less annoying, for example .bipBipBipbipBipBip
-
-        let configureAlerts = ConfigureAlertsCommand(nonce: podState.currentNonce, configurations:[alertConfig1, alertConfig2, alertConfig3])
-
-        do {
-            let _: StatusResponse = try send([configureAlerts])
-        } catch PodCommsError.podAckedInsteadOfReturningResponse {
-            print("pod acked?")
-        }
-        
-        podState.advanceToNextNonce()
-
-        // Insert Cannula
-        // 1a0e7e30bf16020065010050000a000a
-        let insertionBolusAmount = 0.5
-        let timeBetweenPulses = TimeInterval(seconds: 1)
-        let bolusSchedule = SetInsulinScheduleCommand.DeliverySchedule.bolus(units: insertionBolusAmount, timeBetweenPulses: timeBetweenPulses)
-        let bolusScheduleCommand = SetInsulinScheduleCommand(nonce: podState.currentNonce, deliverySchedule: bolusSchedule)
-
-        // 17 0d 00 0064 0001 86a0000000000000
-        let bolusExtraCommand = BolusExtraCommand(units: insertionBolusAmount, timeBetweenPulses: timeBetweenPulses)
-        let _: StatusResponse = try send([bolusScheduleCommand, bolusExtraCommand])
-        podState.advanceToNextNonce()
     }
     
     public func getStatus() throws -> StatusResponse {
@@ -453,14 +455,19 @@ public class PodCommsSession {
         }
     }
     
-    public func deactivatePod() throws -> StatusResponse {
+    public func deactivatePod() throws {
         
         if podState.fault == nil && !podState.suspended {
             let _ = try cancelDelivery(deliveryType: .all, beepType: .beeepBeeep)
         }
 
         let deactivatePod = DeactivatePodCommand(nonce: podState.currentNonce)
-        return try send([deactivatePod])
+        
+        if podState.fault != nil {
+            let _: PodInfoResponse = try send([deactivatePod])
+        } else {
+            let _: StatusResponse = try send([deactivatePod])
+        }
     }
     
     public func acknowledgeAlarms(alarms: PodAlarmState) throws -> StatusResponse {

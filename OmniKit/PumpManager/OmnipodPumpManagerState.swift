@@ -15,13 +15,16 @@ public struct OmnipodPumpManagerState: RawRepresentable, Equatable {
     
     public static let version = 1
     
-    public var podState: PodState
+    public var podState: PodState?
+    
+    public var timeZone: TimeZone
     
     public var rileyLinkConnectionManagerState: RileyLinkConnectionManagerState?
 
-    public init(podState: PodState, rileyLinkConnectionManagerState: RileyLinkConnectionManagerState?) {
+    public init(podState: PodState?, timeZone: TimeZone, rileyLinkConnectionManagerState: RileyLinkConnectionManagerState?) {
         self.podState = podState
         self.rileyLinkConnectionManagerState = rileyLinkConnectionManagerState
+        self.timeZone = timeZone
     }
     
     public init?(rawValue: RawValue) {
@@ -33,6 +36,15 @@ public struct OmnipodPumpManagerState: RawRepresentable, Equatable {
             return nil
         }
         
+        
+        let timeZone: TimeZone
+        if let timeZoneSeconds = rawValue["timeZone"] as? Int,
+            let tz = TimeZone(secondsFromGMT: timeZoneSeconds) {
+            timeZone = tz
+        } else {
+            timeZone = TimeZone.currentFixed
+        }
+        
         let rileyLinkConnectionManagerState: RileyLinkConnectionManagerState?
         if let rileyLinkConnectionManagerStateRaw = rawValue["rileyLinkConnectionManagerState"] as? RileyLinkConnectionManagerState.RawValue {
             rileyLinkConnectionManagerState = RileyLinkConnectionManagerState(rawValue: rileyLinkConnectionManagerStateRaw)
@@ -42,16 +54,20 @@ public struct OmnipodPumpManagerState: RawRepresentable, Equatable {
 
         self.init(
             podState: podState,
+            timeZone: timeZone,
             rileyLinkConnectionManagerState: rileyLinkConnectionManagerState
         )
     }
     
     public var rawValue: RawValue {
         var value: [String : Any] = [
-            "podState": podState.rawValue,
-            
             "version": OmnipodPumpManagerState.version,
+            "timeZone": timeZone.secondsFromGMT(),
         ]
+        
+        if let podState = podState {
+            value["podState"] = podState.rawValue
+        }
         
         if let rileyLinkConnectionManagerState = rileyLinkConnectionManagerState {
             value["rileyLinkConnectionManagerState"] = rileyLinkConnectionManagerState.rawValue
@@ -70,7 +86,7 @@ extension OmnipodPumpManagerState {
 extension OmnipodPumpManagerState: CustomDebugStringConvertible {
     public var debugDescription: String {
         return [
-            "### OmnipodPumpManagerState",
+            "* timeZone: \(timeZone)",
             String(reflecting: podState),
             String(reflecting: rileyLinkConnectionManagerState),
             ].joined(separator: "\n")

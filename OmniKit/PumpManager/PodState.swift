@@ -16,7 +16,6 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     fileprivate var nonceState: NonceState
     public let activatedAt: Date
     public let expiresAt: Date
-    public var timeZone: TimeZone
     public let piVersion: String
     public let pmVersion: String
     public let lot: UInt32
@@ -24,22 +23,22 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     public var basalSchedule: BasalSchedule?
     public var alarms: PodAlarmState
     public var lastInsulinMeasurements: PodInsulinMeasurements?
-    var unfinalizedBolus: UnfinalizedDose?
-    var unfinalizedTempBasal: UnfinalizedDose?
+    public var unfinalizedBolus: UnfinalizedDose?
+    public var unfinalizedTempBasal: UnfinalizedDose?
     var finalizedDoses: [UnfinalizedDose]
-    private(set) var suspended: Bool
+    public private(set) var suspended: Bool
+    public var podProgressStatus: PodProgressStatus?
     public var fault: PodInfoFaultEvent?
     
     public var deliveryScheduleUncertain: Bool {
         return unfinalizedBolus?.scheduledCertainty == .uncertain || unfinalizedTempBasal?.scheduledCertainty == .uncertain
     }
     
-    public init(address: UInt32, activatedAt: Date, expiresAt: Date, timeZone: TimeZone, piVersion: String, pmVersion: String, lot: UInt32, tid: UInt32) {
+    public init(address: UInt32, activatedAt: Date, expiresAt: Date, piVersion: String, pmVersion: String, lot: UInt32, tid: UInt32) {
         self.address = address
         self.nonceState = NonceState(lot: lot, tid: tid)
         self.activatedAt = activatedAt
         self.expiresAt = expiresAt
-        self.timeZone = timeZone
         self.piVersion = piVersion
         self.pmVersion = pmVersion
         self.lot = lot
@@ -51,6 +50,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         self.suspended = false
         self.basalSchedule = nil
         self.fault = nil
+        self.podProgressStatus = nil
         self.alarms = .none
     }
     
@@ -72,6 +72,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         updateDeliveryStatus(deliveryStatus: response.deliveryStatus)
         lastInsulinMeasurements = PodInsulinMeasurements(statusResponse: response, validTime: Date())
         alarms = response.alarms
+        podProgressStatus = response.podProgressStatus
     }
     
     private mutating func updateDeliveryStatus(deliveryStatus: StatusResponse.DeliveryStatus) {
@@ -118,8 +119,6 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             let nonceStateRaw = rawValue["nonceState"] as? NonceState.RawValue,
             let nonceState = NonceState(rawValue: nonceStateRaw),
             let activatedAt = rawValue["activatedAt"] as? Date,
-            let timeZoneSeconds = rawValue["timeZone"] as? Int,
-            let timeZone = TimeZone(secondsFromGMT: timeZoneSeconds),
             let piVersion = rawValue["piVersion"] as? String,
             let pmVersion = rawValue["pmVersion"] as? String,
             let lot = rawValue["lot"] as? UInt32,
@@ -131,7 +130,6 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         self.address = address
         self.nonceState = nonceState
         self.activatedAt = activatedAt
-        self.timeZone = timeZone
         self.piVersion = piVersion
         self.pmVersion = pmVersion
         self.lot = lot
@@ -194,6 +192,12 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         } else {
             self.alarms = .none
         }
+        
+        if let podProgressRaw = rawValue["podProgressStatus"] as? UInt8 {
+            self.podProgressStatus = PodProgressStatus(rawValue: podProgressRaw)
+        } else {
+            self.podProgressStatus = nil
+        }
     }
     
     public var rawValue: RawValue {
@@ -202,7 +206,6 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             "nonceState": nonceState.rawValue,
             "activatedAt": activatedAt,
             "expiresAt": expiresAt,
-            "timeZone": timeZone.secondsFromGMT(),
             "piVersion": piVersion,
             "pmVersion": pmVersion,
             "lot": lot,
@@ -231,6 +234,10 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
         if let fault = self.fault {
             rawValue["fault"] = fault.rawValue
         }
+        
+        if let podProgressStatus = podProgressStatus {
+            rawValue["podProgressStatus"] = podProgressStatus.rawValue
+        }
 
         return rawValue
     }
@@ -239,11 +246,10 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
     
     public var debugDescription: String {
         return [
-            "## PodState",
+            "### PodState",
             "* address: \(String(format: "%04X", address))",
             "* activatedAt: \(String(reflecting: activatedAt))",
             "* expiresAt: \(String(reflecting: expiresAt))",
-            "* timeZone: \(timeZone)",
             "* piVersion: \(piVersion)",
             "* pmVersion: \(pmVersion)",
             "* lot: \(lot)",
@@ -254,6 +260,7 @@ public struct PodState: RawRepresentable, Equatable, CustomDebugStringConvertibl
             "* finalizedDoses: \(String(describing: finalizedDoses))",
             "* basalSchedule: \(String(describing: basalSchedule))",
             "* alarms: \(String(describing: alarms))",
+            "* podProgressStatus: \(String(describing: podProgressStatus))",
             "",
             fault != nil ? String(reflecting: fault!) : "fault: nil",
             "",

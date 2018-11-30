@@ -69,6 +69,14 @@ public class OmnipodPumpManagerSetupViewController: RileyLinkManagerSetupViewCon
         switch viewController {
         case let vc as PairPodSetupViewController:
             vc.rileyLinkPumpManager = rileyLinkPumpManager
+            if let deviceProvider = rileyLinkPumpManager?.rileyLinkDeviceProvider {
+                let connectionManagerState = rileyLinkPumpManager?.rileyLinkConnectionManagerState
+                let pumpManagerState = OmnipodPumpManagerState(podState: nil, timeZone: .currentFixed, rileyLinkConnectionManagerState: connectionManagerState)
+                vc.pumpManager = OmnipodPumpManager(
+                    state: pumpManagerState,
+                    rileyLinkDeviceProvider: deviceProvider,
+                    rileyLinkConnectionManager: rileyLinkPumpManager?.rileyLinkConnectionManager)
+            }
         case let vc as InsertCannulaSetupViewController:
             vc.pumpManager = pumpManager
         default:
