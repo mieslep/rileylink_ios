@@ -63,8 +63,11 @@ public enum PumpModel: String {
     }
     
     // On x15 models, a bolus in progress error is returned when bolusing, even though the bolus succeeds
+    // @see https://github.com/LoopKit/Loop/issues/587
     public var returnsErrorOnBolus: Bool {
-        return generation == 15
+        // return generation == 15
+        // diggabyte: edited to always return false
+        return false 
     }
     
     /// Newer models allow higher precision delivery, and have bit packing to accomodate this.
